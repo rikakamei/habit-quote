@@ -11,7 +11,7 @@ class Item(Base):
     is_custom = Column(Boolean, default=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-
+    persistent = Column(Boolean, default=False)  # ← 追加
     achievement_items = relationship("AchievementItem", back_populates="item")
 
 class Achievement(Base):
@@ -32,7 +32,6 @@ class AchievementItem(Base):
     achievement_id = Column(Integer, ForeignKey("achievements.id"))
     item_id = Column(Integer, ForeignKey("items.id"))
     status = Column(Boolean, default=False)
-    persistent = Column(Boolean, default=False)  # 追加: persistentタスクかどうか
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

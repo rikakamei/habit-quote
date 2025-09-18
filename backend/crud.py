@@ -74,7 +74,11 @@ def get_items(db: Session, skip: int = 0, limit: int = 100):
     return db.query(models.Item).offset(skip).limit(limit).all()
 
 def create_item(db: Session, item: schemas.ItemCreate):
-    db_item = models.Item(title=item.title, is_custom=item.is_custom)
+    db_item = models.Item(
+        title=item.title,
+        is_custom=item.is_custom,
+        persistent=item.persistent  # persistentフラグをDB保存
+    )
     db.add(db_item)
     db.commit()
     db.refresh(db_item)
@@ -120,20 +124,22 @@ def upsert_achievement(db: Session, record: schemas.AchievementRecordIn):
 
     completed_count = 0
     for item_status in record.items:
+        # item_id: 0（仮persistentタスク）はDB検索・保存をスキップ
+        if item_status.item_id == 0:
+            if item_status.status:
+                completed_count += 1
+            continue
         # 送られてきたitem_idが存在するか確認
         item = get_item(db, item_id=item_status.item_id)
         if not item:
             db.rollback()
             raise ValueError(f"Item with id {item_status.item_id} not found")
-
         if item_status.status:
             completed_count += 1
-        # persistentフラグも保存（DBにカラム追加する場合はmodels.pyも修正必要）
         db_achievement_item = models.AchievementItem(
             achievement_id=db_achievement.id,
             item_id=item_status.item_id,
             status=item_status.status
-            # persistent: getattr(item_status, 'persistent', False) # DBにpersistentカラムがあれば
         )
         db.add(db_achievement_item)
     db_achievement.completed_count = completed_count

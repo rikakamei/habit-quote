@@ -6,6 +6,7 @@ from typing import List, Optional
 class ItemBase(BaseModel):
     title: str
     is_custom: bool = True
+    persistent: bool = False  # persistentフラグを追加
 
 class ItemCreate(ItemBase):
     pass

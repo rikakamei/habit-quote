@@ -18,7 +18,7 @@ interface Props
 const QuoteDisplay: React.FC<Props> = ({ quote }) => {
     // quoteデータが存在しない場合は、何も表示しない
     if (!quote) {
-        return <div className="quote-empty">今日の名言はまだありません。</div>;
+        return <div className="quote-empty">ここに名言が表示されるよ</div>;
     }
 
     return (
