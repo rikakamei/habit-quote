@@ -58,7 +58,6 @@ def read_achievements_by_month(month: str = Query(..., description="YYYY-MM形�
     # カレンダー用に日付とcompleted_countのみ返す
     return [schemas.AchievementCalendar(date=a.date, completed_count=a.completed_count) for a in achievements]
 
-# ▼▼▼ このエンドポイントをまるごと置き換え ▼▼▼
 # POST /achievements : タスク達成を記録し、名言も取得・保存する
 @app.post("/achievements", response_model=schemas.Achievement)
 def create_or_update_achievement(record: schemas.AchievementRecordIn, db: Session = Depends(get_db)):
@@ -98,24 +97,6 @@ async def create_quote_for_achievement(achievement_id: int, db: Session = Depend
 
     return new_quote
 
-
 @app.post("/achievements/{achievement_id}/quotes", response_model=schemas.Quote)
 def create_quote_for_achievement(achievement_id: int, quote: schemas.QuoteCreate, db: Session = Depends(get_db)):
     return crud.create_achievement_quote(db=db, achievement_id=achievement_id, quote=quote)
-
-@app.on_event("startup")
-def ensure_persistent_tasks():
-    from sqlalchemy.orm import Session
-    from database import engine
-    session = Session(bind=engine)
-    persistent_tasks = [
-        {"title": "水を飲む", "is_custom": False},
-        {"title": "ストレッチ", "is_custom": False},
-    ]
-    for task in persistent_tasks:
-        existing = session.query(models.Item).filter_by(title=task["title"]).first()
-        if not existing:
-            item = models.Item(title=task["title"], is_custom=task["is_custom"])
-            session.add(item)
-    session.commit()
-    session.close()

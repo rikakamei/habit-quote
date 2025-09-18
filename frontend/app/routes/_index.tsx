@@ -3,6 +3,11 @@ import { json } from "@remix-run/react";
 import type { LoaderFunction } from "@remix-run/node";
 import { useLoaderData } from "@remix-run/react";
 import QuoteDisplay from "~/components/QuoteDisplay";
+import PersistentTaskSection from "../components/PersistentTaskSection";
+import NormalTaskSection from "../components/NormalTaskSection";
+import CalendarSection from "../components/CalendarSection";
+import QuoteSection from "../components/QuoteSection";
+import { dummyHistory } from "../data/dummyHistory";
 
 export const links = () => [
     { rel: "stylesheet", href: "/app/components/QuoteDisplay.css" }
@@ -17,10 +22,13 @@ interface Item
     id: number;
     title: string;
     persistent?: boolean;
+    is_custom?: boolean;
 }
-interface Task extends Item {
+interface Task extends Item
+{
     status: boolean;
     persistent: boolean;
+    is_custom?: boolean;
 }
 interface Quote
 {
@@ -55,8 +63,8 @@ const initialTasks: Task[] = [
 
 // --- 追加: 日付が変わっても消えない常設タスク ---
 const initialPersistentTasks: Task[] = [
-    { id: 101, title: "水を飲む", status: false, persistent: false },
-    { id: 102, title: "ストレッチ", status: false, persistent: false },
+    { id: 101, title: "水を飲む", status: false, persistent: true },
+    { id: 102, title: "ストレッチ", status: false, persistent: true },
 ];
 
 function getMonthDays(year: number, month: number)
@@ -82,22 +90,19 @@ export default function Index()
         let allTasks: Task[] = [];
         if (Array.isArray(items))
         {
-            // DBに存在するpersistentタスク
-            const persistentTasks = persistentTaskTitles
-                .map(title => items.find(item => item.title === title))
-                .filter(Boolean)
-                .map(item => ({ ...item, status: false, persistent: false }));
+            // 毎日やること: persistent: true のみ
+            let persistentTasks = items.filter(item => item.persistent === true).map(item => ({ ...item, status: false, persistent: true, is_custom: item.is_custom }));
             // DBに存在しない場合は仮で追加
             persistentTaskTitles.forEach((title, idx) =>
             {
-                if (!items.find(item => item.title === title))
+                if (!items.find(item => item.title === title && item.persistent === true))
                 {
-                    allTasks.push({ id: -(idx + 1), title, status: false, persistent: false });
+                    persistentTasks.push({ id: -(idx + 1), title, status: false, persistent: true, is_custom: false });
                 }
             });
-            // 通常タスク
-            const normalTasks = items.filter(item => !persistentTaskTitles.includes(item.title)).map(item => ({ ...item, status: false, persistent: false }));
-            allTasks = [...persistentTasks, ...normalTasks, ...allTasks];
+            // 今日だけやること: persistent: false のみ
+            const normalTasks = items.filter(item => item.persistent === false).map(item => ({ ...item, status: false, persistent: false, is_custom: item.is_custom }));
+            allTasks = [...persistentTasks, ...normalTasks];
         } else
         {
             allTasks = [...initialPersistentTasks, ...initialTasks];
@@ -138,20 +143,24 @@ export default function Index()
                 const response = await fetch(`${API_URL}/items`);
                 if (!response.ok) throw new Error('アイテム取得失敗');
                 const data = await response.json() as Item[];
-                // persistentタスクも必ず含める
-                let persistentTasks = persistentTaskTitles
-                    .map(title => data.find(item => item.title === title))
-                    .filter((item): item is Item => !!item)
-                    .map(item => ({ ...item, status: false, persistent: item.persistent ?? true }));
+                // DBから取得したitemsをコンソール出力
+                console.log('DB items:', data);
+                // persistentタスクも必ずpersistentフラグで判定
+                let persistentTasks = data.filter(item => item.persistent === true).map(item => ({ ...item, status: false, persistent: true, is_custom: item.is_custom }));
                 // DBに存在しないpersistentタスクは仮追加
-                persistentTaskTitles.forEach((title, idx) => {
-                    if (!data.find(item => item.title === title)) {
-                        persistentTasks.push({ id: -(idx + 1), title, status: false, persistent: true });
+                persistentTaskTitles.forEach((title, idx) =>
+                {
+                    if (!data.find(item => item.title === title && item.persistent === true))
+                    {
+                        persistentTasks.push({ id: -(idx + 1), title, status: false, persistent: true, is_custom: false });
                     }
                 });
-                // 通常タスク
-                const normalTasks = data.filter(item => !persistentTaskTitles.includes(item.title)).map(item => ({ ...item, status: false, persistent: item.persistent ?? false }));
-                setTasks([...persistentTasks, ...normalTasks].filter((task): task is Task => typeof task.id === "number" && typeof task.title === "string"));
+                // 今日だけやること: persistent: false のみ
+                const normalTasks = data.filter(item => item.persistent === false).map(item => ({ ...item, status: false, persistent: false, is_custom: item.is_custom }));
+                setTasks([...persistentTasks, ...normalTasks].map(task => ({
+                    ...task,
+                    is_custom: typeof task.is_custom === "boolean" ? task.is_custom : false
+                })).filter(task => typeof task.id === "number" && typeof task.title === "string"));
             } catch (error)
             {
                 console.error("アイテム取得エラー:", error);
@@ -193,15 +202,17 @@ export default function Index()
     // --- 達成状況をサーバーに保存する処理 ---
     const handleSave = async () =>
     {
-        const today = new Date().toISOString().split('T')[0];
-        // DBに存在するid（id > 0）のみPOST
-        const validTasks = tasks.filter(task => task.id > 0);
+        const todayStr = new Date().toISOString().split('T')[0];
+        // チェックが付いているタスク全て（idの正負問わず）をPOST
+        const validTasks = tasks.filter(task => task.status);
         const payload = {
-            date: today,
-            items: validTasks.map(({ id, status, title }) => ({
-                item_id: id,
-                status: status,
-                persistent: persistentTaskTitles.includes(title)
+            date: todayStr,
+            items: validTasks.map(({ id, status, title, persistent }) => ({
+                item_id: id > 0 ? id : 0, // 仮persistentタスクはitem_id: 0
+                status,
+                persistent,
+                title,
+                date: todayStr
             }))
         };
         try
@@ -212,15 +223,21 @@ export default function Index()
                 body: JSON.stringify(payload),
             });
             if (!response.ok) throw new Error('記録の保存に失敗しました。');
-            const achievement: Achievement = await response.json();
+            const achievement = await response.json();
             setAchievementId(achievement.id);
             setRevealedQuotes(achievement.quotes || []);
-            // 名言権利数はDBに存在するタスク（id > 0）でstatus:trueのものだけカウント
-            const checkedCount = validTasks.filter(task => task.status).length;
+            // 名言権利数はチェックが付いているタスク全てでカウント
+            const checkedCount = validTasks.length;
             const remainingChances = checkedCount - (achievement.quotes?.length || 0);
             setQuoteChances(remainingChances > 0 ? remainingChances : 0);
-            const todayStr = new Date().toISOString().split('T')[0];
             setAchievementDates(prev => ({ ...prev, [todayStr]: achievement.completed_count }));
+            setSelectedDate(todayStr);
+            // --- 修正: status:trueのtasks全てをhistory.tasksに表示する ---
+            const allCheckedTasks = tasks.filter(task => task.status).map(task => task.title);
+            setHistory({
+                tasks: allCheckedTasks,
+                quotes: achievement.quotes || [],
+            });
         } catch (error)
         {
             console.error("保存処理エラー:", error);
@@ -247,7 +264,8 @@ export default function Index()
             // --- Stateを更新 ---
             setRevealedQuotes(prev => [...prev, newQuote]); // 表示済みリストに新しい名言を追加
             setQuoteChances(prev => prev - 1); // 残り回数を1減らす
-
+            // historyにも名言を追加
+            setHistory(prev => prev ? { ...prev, quotes: [...prev.quotes, newQuote] } : null);
         } catch (error)
         {
             console.error("名言取得エラー:", error);
@@ -263,6 +281,8 @@ export default function Index()
     {
         const date = e.target.value;
         setSelectedDate(date);
+        setRevealedQuotes([]); // 日付変更時に名言stateをリセット
+        // チェック状態もリセット（tasksはAPI再取得で初期化される想定）
         try
         {
             const response = await fetch(`${API_URL}/achievements/${date}`);
@@ -283,13 +303,33 @@ export default function Index()
     {
         const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
         setSelectedDate(dateStr);
+        setRevealedQuotes([]); // 日付変更時に名言stateをリセット
+        // ダミーデータ利用: 2025-09-11 の場合はダミー履歴をセット
+        if (dateStr === "2025-09-11")
+        {
+            setHistory({
+                tasks: dummyHistory["2025-09-11"].tasks,
+                quotes: dummyHistory["2025-09-11"].quotes,
+            });
+            return;
+        }
         try
         {
             const response = await fetch(`${API_URL}/achievements/${dateStr}`);
             if (!response.ok) throw new Error("記録取得失敗");
             const achievement = await response.json();
+            let apiTasks = achievement.items.filter((item: any) => item.status).map((item: any) => item.title ?? item.item?.title ?? `タスクID:${item.item_id}`);
+            // --- 修正: is_custom=falseかつpersistent=trueの初期タスクもhistory.tasksに必ず追加 ---
+            const extraInitialTasks = tasks.filter(task => task.status && task.persistent && (task as any).is_custom === false && task.id > 0 && !apiTasks.includes(task.title)).map(task => task.title);
+            // 今日の日付の場合のみ仮persistentタスク（id < 0, status: true, persistent: true）も追加
+            const todayStr = new Date().toISOString().split('T')[0];
+            if (dateStr === todayStr)
+            {
+                const extraTasks = tasks.filter(task => task.id < 0 && task.status && task.persistent).map(task => task.title);
+                apiTasks = [...apiTasks, ...extraTasks];
+            }
             setHistory({
-                tasks: achievement.items.filter((item: any) => item.status).map((item: any) => item.title ?? item.item?.title ?? `タスクID:${item.item_id}`),
+                tasks: [...apiTasks, ...extraInitialTasks],
                 quotes: achievement.quotes || [],
             });
         } catch (err)
@@ -320,6 +360,8 @@ export default function Index()
                 {
                     map[a.date] = a.completed_count;
                 });
+                // ダミーデータ分も追加
+                map["2025-09-11"] = dummyHistory["2025-09-11"].tasks.length;
                 setAchievementDates(map);
             } catch { }
         };
@@ -340,40 +382,15 @@ export default function Index()
     {
         return achievementDates[dateStr] ? "●" : "";
     }
-
     // --- 表示部 ---
     return (
         <div className="container">
             <h1>じぶん記録</h1>
             <section className="task-section">
                 <h2>毎日やること</h2>
-                <ul className="task-list">
-                    {tasks.filter(task => task.persistent).map(task => (
-                        <li key={task.id}>
-                            <input
-                                type="checkbox"
-                                id={`task-${task.id}`}
-                                checked={task.status}
-                                onChange={() => handleTaskCheckChange(task.id)}
-                            />
-                            <label htmlFor={`task-${task.id}`}>{task.title}</label>
-                        </li>
-                    ))}
-                </ul>
+                <PersistentTaskSection tasks={tasks} handleTaskCheckChange={handleTaskCheckChange} />
                 <h2 style={{ marginTop: "2rem" }}>今日だけやること</h2>
-                <ul className="task-list">
-                    {tasks.filter(task => !task.persistent).map(task => (
-                        <li key={task.id}>
-                            <input
-                                type="checkbox"
-                                id={`task-${task.id}`}
-                                checked={task.status}
-                                onChange={() => handleTaskCheckChange(task.id)}
-                            />
-                            <label htmlFor={`task-${task.id}`}>{task.title}</label>
-                        </li>
-                    ))}
-                </ul>
+                <NormalTaskSection tasks={tasks} handleTaskCheckChange={handleTaskCheckChange} />
                 <form onSubmit={handleAddTask} style={{ marginTop: "1rem" }}>
                     <input
                         type="text"
@@ -402,85 +419,34 @@ export default function Index()
                         />今日だけやること
                     </label>
                     <button type="submit">追加</button>
+                    {error && <div style={{ color: 'red', marginTop: '0.5rem' }}>{error}</div>}
                 </form>
                 <button onClick={handleSave} className="save-button" style={{ marginTop: "1rem" }}>
                     達成を記録する
                 </button>
-            </section>
-
-            {/* ▼▼▼ 名言表示セクションのUIを修正 ▼▼▼ */}
-            <section className="quote-section">
-                {/* achievementId がある場合（一度でも記録された後）に表示 */}
-                {achievementId && (
-                    <div className="reveal-quote-controls">
-                        <button
-                            onClick={handleGetQuoteClick}
-                            disabled={quoteChances <= 0 || isLoadingQuote}
-                            className="save-button"
-                        >
-                            {isLoadingQuote ? "取得中..." : "名言を見る"}
-                        </button>
-                        <span style={{ marginLeft: '1rem' }}>
-                            （残り {quoteChances} 回）
-                        </span>
-                    </div>
-                )}
-                {error && <div style={{ color: "red" }}>{error}</div>}
-                <QuoteDisplay quote={revealedQuotes.length > 0 ? revealedQuotes[revealedQuotes.length - 1] : null} />
+                <QuoteSection
+                    achievementId={achievementId}
+                    quoteChances={quoteChances}
+                    isLoadingQuote={isLoadingQuote}
+                    error={error}
+                    revealedQuotes={revealedQuotes}
+                    handleGetQuoteClick={handleGetQuoteClick}
+                />
             </section>
 
             {/* ▼▼▼ 過去の記録セクション ▼▼▼ */}
             <section style={{ marginTop: "2rem" }}>
                 <h2>過去の記録を見る</h2>
-                <table style={{ borderCollapse: "collapse", margin: "1rem 0" }}>
-                    <thead>
-                        <tr>
-                            <th colSpan={7}>{year}年{month + 1}月</th>
-                        </tr>
-                        <tr>
-                            {['日', '月', '火', '水', '木', '金', '土'].map((w, i) => <th key={i}>{w}</th>)}
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {(() =>
-                        {
-                            const firstDayOfWeek = new Date(year, month, 1).getDay();
-                            const rows: JSX.Element[] = [];
-                            let cells: JSX.Element[] = [];
-                            for (let i = 0; i < firstDayOfWeek; i++)
-                            {
-                                cells.push(<td key={"empty-" + i}></td>);
-                            }
-                            days.forEach((day, idx) =>
-                            {
-                                const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-                                const isSelected = selectedDate.endsWith(`-${String(day).padStart(2, "0")}`);
-                                cells.push(
-                                    <td key={day}
-                                        style={{
-                                            padding: "0.5rem",
-                                            cursor: "pointer",
-                                            background: isSelected ? "#e0f7fa" : undefined,
-                                            color: undefined,
-                                            textAlign: "center"
-                                        }}
-                                        onClick={() => handleCalendarClick(day)}>
-                                        {achievementDates[dateStr]
-                                            ? <span className="circle-day">{day}</span>
-                                            : day}
-                                    </td>
-                                );
-                                if ((cells.length) % 7 === 0 || day === days.length)
-                                {
-                                    rows.push(<tr key={day}>{cells}</tr>);
-                                    cells = [];
-                                }
-                            });
-                            if (cells.length) rows.push(<tr key="last-row">{cells}</tr>);
-                            return rows;
-                        })()}
-                    </tbody>
-                </table>
+                <CalendarSection
+                    year={year}
+                    month={month}
+                    setYear={setYear}
+                    setMonth={setMonth}
+                    days={days}
+                    achievementDates={achievementDates}
+                    selectedDate={selectedDate}
+                    handleCalendarClick={handleCalendarClick}
+                />
                 {selectedDate && (
                     history ? (
                         <div style={{ marginTop: "1rem", textAlign: "left" }}>
